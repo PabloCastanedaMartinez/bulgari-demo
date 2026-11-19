@@ -1,14 +1,21 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { formatGTQ } from '../utils/currency.js';
 
 export default function ProductModal({
   product,
   selectedVariant,
+  availableStock = 0,
+  productCartQty = 0,
   onSelectVariant,
   onAddToCart,
   onClose
 }) {
   const dialogRef = useRef(null);
+  const [stockNotice, setStockNotice] = useState('');
+
+  useEffect(() => {
+    setStockNotice('');
+  }, [product?.id, availableStock, productCartQty]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -19,6 +26,10 @@ export default function ProductModal({
       dialog.close();
     }
   }, [product]);
+
+  const isOutOfStock = availableStock <= 0;
+  const isLowStock = availableStock > 0 && availableStock <= 5;
+  const atMaxStock = productCartQty >= availableStock;
 
   return (
     <dialog
@@ -52,7 +63,29 @@ export default function ProductModal({
           <div className="product-modal-grid">
             <img className="product-modal-img" src={product.image} alt={product.alt} />
             <div className="product-modal-info">
-              <strong className="product-price tabular">{formatGTQ(product.price)}</strong>
+              <div className="modal-stock-row">
+                <strong className="product-price tabular">{formatGTQ(product.price)}</strong>
+                {isOutOfStock ? (
+                  <span className="meta-tag meta-tag--stock-out">Agotado</span>
+                ) : isLowStock ? (
+                  <span className="meta-tag meta-tag--stock-low tabular">
+                    {availableStock === 1
+                      ? '¡Última 1 unidad!'
+                      : `¡Últimas ${availableStock} unidades!`}
+                  </span>
+                ) : (
+                  <span className="meta-tag meta-tag--stock-ok tabular">
+                    Stock disponible: {availableStock} unidades
+                  </span>
+                )}
+              </div>
+              {productCartQty > 0 && (
+                <p className="modal-reserved-note tabular">
+                  En tu reserva: {productCartQty} de {availableStock}{' '}
+                  {availableStock === 1 ? 'unidad' : 'unidades'}
+                  {atMaxStock ? ' (límite alcanzado)' : ''}
+                </p>
+              )}
               <p className="product-desc">{product.description}</p>
               <div className="variant-group">
                 <span className="variant-label">Presentación</span>
@@ -78,15 +111,34 @@ export default function ProductModal({
                   </div>
                 ))}
               </dl>
+              {stockNotice && (
+                <div className="stock-alert" role="alert">
+                  {stockNotice}
+                </div>
+              )}
               <button
                 type="button"
                 className="btn btn--primary btn--full"
+                disabled={isOutOfStock}
+                aria-disabled={!isOutOfStock && atMaxStock ? 'true' : undefined}
                 onClick={() => {
-                  onAddToCart(product.id, selectedVariant, 1);
-                  onClose();
+                  const added = onAddToCart(product.id, selectedVariant, 1);
+                  if (added) {
+                    onClose();
+                  } else {
+                    setStockNotice(
+                      `Stock insuficiente para "${product.name}". Solo hay ${availableStock} ${
+                        availableStock === 1 ? 'unidad disponible' : 'unidades disponibles'
+                      }.`
+                    );
+                  }
                 }}
               >
-                Agregar a reserva — {formatGTQ(product.price)}
+                {isOutOfStock
+                  ? 'Sin stock disponible'
+                  : atMaxStock
+                    ? `Stock máximo en reserva (${availableStock})`
+                    : `Agregar a reserva — ${formatGTQ(product.price)}`}
               </button>
             </div>
           </div>

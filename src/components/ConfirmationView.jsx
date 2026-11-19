@@ -1,17 +1,36 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { TRACKING_LABELS } from '../data/products.js';
 import { STORE_PICKUP_LOCATION, formatGTQ } from '../utils/currency.js';
+import {
+  TRACKING_STEP_MINUTES,
+  formatCountdown,
+  formatStepTime,
+  getOrderTrackingState
+} from '../utils/tracking.js';
 
 export default function ConfirmationView({
   order,
-  onAdvanceTracking,
   onBackToCatalog,
   onOpenHistory
 }) {
-  if (!order) return null;
+  const [now, setNow] = useState(() => Date.now());
+  const tracking = order ? getOrderTrackingState(order, now) : null;
+  const isCompleted = tracking ? tracking.isCompleted : true;
+
+  useEffect(() => {
+    setNow(Date.now());
+    if (!order || isCompleted) return undefined;
+
+    const intervalId = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [order?.id, order?.createdAtMs, isCompleted]);
+
+  if (!order || !tracking) return null;
 
   const pickup = order.pickup || order.address || {};
-  const isDelivered = order.trackingIndex >= TRACKING_LABELS.length - 1;
 
   return (
     <div id="vista-confirmacion" className="view-panel">
@@ -37,25 +56,91 @@ export default function ConfirmationView({
             <div className="tracking-panel">
               <div className="tracking-head">
                 <h2>Estado de preparación en tienda</h2>
-                <button
-                  type="button"
-                  className="btn btn--secondary btn--sm"
-                  disabled={isDelivered}
-                  onClick={() => onAdvanceTracking(order.id)}
+                <div
+                  className={`tracking-timer tabular${tracking.isCompleted ? ' tracking-timer--done' : ''}`}
+                  aria-live="off"
                 >
-                  {isDelivered ? 'Reserva recogida en tienda' : 'Avanzar etapa de preparación'}
-                </button>
+                  {tracking.isCompleted ? (
+                    <>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path
+                          d="M5 13L9 17L19 7"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      <span>Preparación completada</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.75" />
+                        <path
+                          d="M12 7V12L15 14"
+                          stroke="currentColor"
+                          strokeWidth="1.75"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      <span>Siguiente etapa en {formatCountdown(tracking.remainingMs)}</span>
+                    </>
+                  )}
+                </div>
               </div>
+
+              <div className="tracking-schedule">
+                <p className="tracking-schedule-text">
+                  {tracking.isCompleted ? (
+                    <>
+                      Ciclo cronometrado completado en incrementos de {TRACKING_STEP_MINUTES} min (45 min en total).
+                    </>
+                  ) : (
+                    <>
+                      Actualización cronometrada cada {TRACKING_STEP_MINUTES} min · Próxima etapa:{' '}
+                      <strong>{tracking.nextStep.title}</strong> ({formatStepTime(tracking.nextChangeAtMs)})
+                    </>
+                  )}
+                </p>
+                <div
+                  className="tracking-progress"
+                  role="progressbar"
+                  aria-label="Progreso cronometrado de preparación del pedido"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(tracking.overallProgressPct)}
+                >
+                  <div
+                    className={`tracking-progress-fill${tracking.isCompleted ? ' tracking-progress-fill--done' : ''}`}
+                    style={{ width: `${tracking.overallProgressPct}%` }}
+                  />
+                </div>
+              </div>
+
               <ol className="tracking-steps">
-                {TRACKING_LABELS.map((step, idx) => (
-                  <li
-                    key={step.key}
-                    className={`tracking-step ${idx <= order.trackingIndex ? 'tracking-step--done' : ''}`}
-                  >
-                    <strong>{step.title}</strong>
-                    <span>{step.detail}</span>
-                  </li>
-                ))}
+                {TRACKING_LABELS.map((step, idx) => {
+                  const isDone = idx <= tracking.trackingIndex;
+                  const isCurrent = idx === tracking.trackingIndex && !tracking.isCompleted;
+                  return (
+                    <li
+                      key={step.key}
+                      className={`tracking-step${isDone ? ' tracking-step--done' : ''}${
+                        isCurrent ? ' tracking-step--current' : ''
+                      }`}
+                      aria-current={idx === tracking.trackingIndex ? 'step' : undefined}
+                    >
+                      <span className="tracking-step-time tabular">
+                        {idx === 0
+                          ? `Inicio · ${formatStepTime(tracking.stepTimestamps[idx])}`
+                          : `+${idx * TRACKING_STEP_MINUTES} min · ${formatStepTime(tracking.stepTimestamps[idx])}`}
+                      </span>
+                      <strong>{step.title}</strong>
+                      <span>{step.detail}</span>
+                    </li>
+                  );
+                })}
               </ol>
             </div>
 

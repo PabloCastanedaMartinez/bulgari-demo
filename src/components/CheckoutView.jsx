@@ -117,6 +117,23 @@ export default function CheckoutView({
 
   const handleSubmit = (e) => {
     e.preventDefault();
+
+    if (metrics.items.length === 0) {
+      const emptyMsg = 'Tu lista de reserva está vacía. Agrega productos antes de confirmar.';
+      setErrorBanner(emptyMsg);
+      onShowToast(emptyMsg);
+      return;
+    }
+
+    if (metrics.hasStockErrors) {
+      const stockMsg =
+        metrics.stockErrors.join(' ') ||
+        'Algunos productos superan el stock disponible. Ajusta tu lista de reserva antes de confirmar.';
+      setErrorBanner(stockMsg);
+      onShowToast(metrics.stockErrors[0] || stockMsg);
+      return;
+    }
+
     const newErrors = {};
     const invalidOrder = [];
 
@@ -160,10 +177,6 @@ export default function CheckoutView({
     setSubmitting(true);
 
     const orderId = generateOrderFolio();
-    const createdAt = new Date().toLocaleString('es-GT', {
-      dateStyle: 'medium',
-      timeStyle: 'short'
-    });
 
     const trimmedPickup = {
       nombre: pickup.nombre.trim(),
@@ -185,10 +198,16 @@ export default function CheckoutView({
     };
 
     setTimeout(() => {
+      const confirmedAtMs = Date.now();
+      const createdAt = new Date(confirmedAtMs).toLocaleString('es-GT', {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      });
       setSubmitting(false);
       onOrderConfirmed({
         id: orderId,
         createdAt,
+        createdAtMs: confirmedAtMs,
         pickup: trimmedPickup,
         payment: paymentDetail
       });
@@ -494,6 +513,15 @@ export default function CheckoutView({
                         <span className="summary-item-name">{item.product.name}</span>
                         <span className="summary-item-variant">
                           {item.variant} · Cant. {item.qty}
+                        </span>
+                        <span
+                          className={`summary-item-stock tabular${
+                            item.exceedsStock ? ' summary-item-stock--error' : ''
+                          }`}
+                        >
+                          {item.exceedsStock
+                            ? `Excede stock disponible (${item.availableStock} uds.)`
+                            : `Stock disponible: ${item.availableStock} uds.`}
                         </span>
                       </div>
                       <span className="summary-item-price tabular">{formatGTQ(item.lineTotal)}</span>

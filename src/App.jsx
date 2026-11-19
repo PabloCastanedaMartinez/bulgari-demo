@@ -4,6 +4,11 @@ import {
   formatGTQ,
   generateOrderFolio
 } from './utils/currency.js';
+import {
+  TRACKING_STEP_MS,
+  getOrderTrackingState,
+  normalizeOrderTracking
+} from './utils/tracking.js';
 import Header from './components/Header.jsx';
 import StoreView from './components/StoreView.jsx';
 import CartDrawer from './components/CartDrawer.jsx';
@@ -30,7 +35,11 @@ function readStoredCart() {
 function readStoredOrders() {
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_ORDERS_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    return parsed
+      .filter((order) => order && typeof order === 'object')
+      .map((order) => normalizeOrderTracking(order, now));
   } catch {
     return [];
   }
@@ -66,6 +75,16 @@ export default function App() {
   const [srAnnouncement, setSrAnnouncement] = useState('');
   const toastTimerRef = useRef(null);
   const cartButtonRef = useRef(null);
+  const activeOrderIdRef = useRef(activeOrderId);
+  const viewRef = useRef(view);
+
+  useEffect(() => {
+    activeOrderIdRef.current = activeOrderId;
+  }, [activeOrderId]);
+
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
 
   const showToast = useCallback((msg) => {
     setToastMsg(msg);
@@ -127,9 +146,14 @@ export default function App() {
           return prev;
         }
 
+        const demoCreatedAtMs = Date.now() - 2 * TRACKING_STEP_MS;
         const demoOrder = {
           id: 'BLG-4821',
-          createdAt: '18 nov 2026, 15:15',
+          createdAt: new Date(demoCreatedAtMs).toLocaleString('es-GT', {
+            dateStyle: 'medium',
+            timeStyle: 'short'
+          }),
+          createdAtMs: demoCreatedAtMs,
           trackingIndex: 2,
           pickup: {
             nombre: 'Andrea Morales Argueta',
@@ -175,28 +199,90 @@ export default function App() {
     }
   }, []);
 
+  const availableStockByProduct = useMemo(() => {
+    const reservedByProduct = {};
+    for (const order of orders) {
+      if (!Array.isArray(order?.items)) continue;
+      for (const item of order.items) {
+        if (!item?.id) continue;
+        reservedByProduct[item.id] = (reservedByProduct[item.id] || 0) + (Number(item.qty) || 0);
+      }
+    }
+
+    const map = {};
+    for (const product of PRODUCTS) {
+      const baseStock = Number(product.stock) || 0;
+      const reservedQty = reservedByProduct[product.id] || 0;
+      map[product.id] = Math.max(0, baseStock - reservedQty);
+    }
+    return map;
+  }, [orders]);
+
+  const getAvailableStock = useCallback(
+    (productId) => availableStockByProduct[productId] ?? 0,
+    [availableStockByProduct]
+  );
+
+  const getProductCartQty = useCallback(
+    (productId) =>
+      cart.reduce(
+        (sum, item) => (item.productId === productId ? sum + (Number(item.qty) || 0) : sum),
+        0
+      ),
+    [cart]
+  );
+
   const cartMetrics = useMemo(() => {
     let count = 0;
     let subtotal = 0;
     const items = [];
+    const qtyByProduct = {};
+
+    for (const entry of cart) {
+      qtyByProduct[entry.productId] = (qtyByProduct[entry.productId] || 0) + (Number(entry.qty) || 0);
+    }
+
+    const stockErrorMessagesByProduct = {};
 
     for (const entry of cart) {
       const product = PRODUCTS.find((p) => p.id === entry.productId);
       if (!product) continue;
       const lineTotal = product.price * entry.qty;
+      const availableStock = getAvailableStock(product.id);
+      const productCartQty = qtyByProduct[product.id] || 0;
+      const remainingStock = Math.max(0, availableStock - productCartQty);
+      const atMaxStock = productCartQty >= availableStock;
+      const exceedsStock = productCartQty > availableStock || availableStock <= 0;
+
+      if (exceedsStock && !stockErrorMessagesByProduct[product.id]) {
+        stockErrorMessagesByProduct[product.id] =
+          availableStock <= 0
+            ? `Sin stock disponible para "${product.name}".`
+            : `Stock insuficiente para "${product.name}". Solo hay ${availableStock} ${
+                availableStock === 1 ? 'unidad disponible' : 'unidades disponibles'
+              } (tienes ${productCartQty} en reserva).`;
+      }
+
       count += entry.qty;
       subtotal += lineTotal;
       items.push({
         product,
         variant: entry.variant,
         qty: entry.qty,
-        lineTotal
+        lineTotal,
+        availableStock,
+        productCartQty,
+        remainingStock,
+        atMaxStock,
+        exceedsStock
       });
     }
 
+    const stockErrors = Object.values(stockErrorMessagesByProduct);
+    const hasStockErrors = stockErrors.length > 0;
     const total = subtotal;
-    return { count, subtotal, total, items };
-  }, [cart]);
+    return { count, subtotal, total, items, hasStockErrors, stockErrors };
+  }, [cart, getAvailableStock]);
 
   const showMobileBar = cartMetrics.count > 0 && view === 'vista-tienda';
 
@@ -240,7 +326,25 @@ export default function App() {
   const handleAddToCart = useCallback(
     (productId, variant, qty = 1) => {
       const product = PRODUCTS.find((p) => p.id === productId);
-      if (!product) return;
+      if (!product) return false;
+
+      const availableStock = getAvailableStock(productId);
+      const currentProductQty = getProductCartQty(productId);
+
+      if (availableStock <= 0) {
+        showToast(`Sin stock disponible para "${product.name}".`);
+        return false;
+      }
+
+      if (currentProductQty + qty > availableStock) {
+        showToast(
+          `Stock insuficiente para "${product.name}". Solo hay ${availableStock} ${
+            availableStock === 1 ? 'unidad disponible' : 'unidades disponibles'
+          }.`
+        );
+        return false;
+      }
+
       const chosenVariant = variant || product.variants[0];
 
       setCart((prev) => {
@@ -256,12 +360,28 @@ export default function App() {
       });
 
       showToast(`Agregado a reserva: ${product.name} (${chosenVariant})`);
+      return true;
     },
-    [showToast]
+    [getAvailableStock, getProductCartQty, showToast]
   );
 
   const handleUpdateQty = useCallback(
     (productId, variant, delta) => {
+      if (delta > 0) {
+        const product = PRODUCTS.find((p) => p.id === productId);
+        const availableStock = getAvailableStock(productId);
+        const currentProductQty = getProductCartQty(productId);
+        if (currentProductQty + delta > availableStock) {
+          const name = product ? product.name : 'este producto';
+          showToast(
+            `Alcanzaste el límite de stock disponible para "${name}" (${availableStock} ${
+              availableStock === 1 ? 'unidad' : 'unidades'
+            }).`
+          );
+          return;
+        }
+      }
+
       setCart((prev) => {
         const next = prev
           .map((item) =>
@@ -278,7 +398,7 @@ export default function App() {
         return next;
       });
     },
-    [view, showToast]
+    [getAvailableStock, getProductCartQty, view, showToast]
   );
 
   const handleRemoveItem = useCallback(
@@ -327,20 +447,60 @@ export default function App() {
       showToast('Agrega al menos un producto antes de continuar con tu reserva.');
       return;
     }
+    if (cartMetrics.hasStockErrors) {
+      showToast(
+        cartMetrics.stockErrors[0] ||
+          'Ajusta las cantidades que superan el stock disponible antes de continuar.'
+      );
+      return;
+    }
     setIsCartOpen(false);
     switchView('vista-checkout');
-  }, [cartMetrics.count, showToast, switchView]);
+  }, [cartMetrics.count, cartMetrics.hasStockErrors, cartMetrics.stockErrors, showToast, switchView]);
 
   const handleOrderConfirmed = useCallback(
-    ({ id, createdAt, pickup, payment }) => {
+    ({ id, createdAt, createdAtMs, pickup, payment }) => {
+      if (cartMetrics.items.length === 0) {
+        showToast('Tu lista de reserva está vacía.');
+        return false;
+      }
+      if (cartMetrics.hasStockErrors) {
+        showToast(
+          cartMetrics.stockErrors[0] ||
+            'No hay stock suficiente para completar tu reserva.'
+        );
+        return false;
+      }
+
+      const qtyByProduct = {};
+      for (const item of cartMetrics.items) {
+        qtyByProduct[item.product.id] = (qtyByProduct[item.product.id] || 0) + item.qty;
+      }
+      for (const [productId, totalQty] of Object.entries(qtyByProduct)) {
+        const available = getAvailableStock(productId);
+        if (totalQty > available) {
+          const product = PRODUCTS.find((p) => p.id === productId);
+          showToast(
+            `Stock insuficiente para "${product?.name || productId}". Solo hay ${available} ${
+              available === 1 ? 'unidad disponible' : 'unidades disponibles'
+            }.`
+          );
+          return false;
+        }
+      }
+
+      const resolvedCreatedAtMs =
+        typeof createdAtMs === 'number' && Number.isFinite(createdAtMs) ? createdAtMs : Date.now();
+
       const order = {
         id: id || generateOrderFolio(),
         createdAt:
           createdAt ||
-          new Date().toLocaleString('es-GT', {
+          new Date(resolvedCreatedAtMs).toLocaleString('es-GT', {
             dateStyle: 'medium',
             timeStyle: 'short'
           }),
+        createdAtMs: resolvedCreatedAtMs,
         trackingIndex: 0,
         pickup,
         payment,
@@ -362,23 +522,80 @@ export default function App() {
       setCart([]);
       switchView('vista-confirmacion');
       showToast(`Reserva ${order.id} registrada para recoger en tienda (${formatGTQ(order.total)})`);
+      return true;
     },
-    [cartMetrics, showToast, switchView]
+    [cartMetrics, getAvailableStock, showToast, switchView]
   );
 
-  const handleAdvanceTracking = useCallback(
-    (orderId) => {
-      setOrders((prev) =>
-        prev.map((order) =>
-          order.id === orderId && order.trackingIndex < 3
-            ? { ...order, trackingIndex: order.trackingIndex + 1 }
-            : order
-        )
-      );
-      showToast('Estado de preparación actualizado');
-    },
-    [showToast]
-  );
+  // Sincronización cronometrada del estado del pedido en incrementos de 15 minutos
+  useEffect(() => {
+    if (orders.length === 0) return undefined;
+
+    let timerId = null;
+    let disposed = false;
+
+    const syncOrders = () => {
+      if (disposed) return;
+      if (timerId) {
+        clearTimeout(timerId);
+        timerId = null;
+      }
+
+      const now = Date.now();
+      let changed = false;
+      let minRemainingMs = Infinity;
+      let activeAdvancedTitle = null;
+      const targetActiveId =
+        (orders.find((o) => o.id === activeOrderIdRef.current) || orders[0])?.id || null;
+
+      const nextOrders = orders.map((order) => {
+        const state = getOrderTrackingState(order, now);
+        if (!state.isCompleted) {
+          minRemainingMs = Math.min(minRemainingMs, state.remainingMs);
+        }
+        if (state.trackingIndex !== order.trackingIndex || state.createdAtMs !== order.createdAtMs) {
+          changed = true;
+          if (order.id === targetActiveId && state.trackingIndex > (Number(order.trackingIndex) || 0)) {
+            activeAdvancedTitle = state.currentStep.title;
+          }
+          return {
+            ...order,
+            createdAtMs: state.createdAtMs,
+            trackingIndex: state.trackingIndex
+          };
+        }
+        return order;
+      });
+
+      if (changed) {
+        setOrders(nextOrders);
+        if (activeAdvancedTitle && viewRef.current === 'vista-confirmacion') {
+          showToast(`Estado del pedido actualizado: ${activeAdvancedTitle}`);
+        }
+        return;
+      }
+
+      if (Number.isFinite(minRemainingMs)) {
+        const delay = Math.min(Math.max(250, minRemainingMs + 100), 60_000);
+        timerId = setTimeout(syncOrders, delay);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncOrders();
+      }
+    };
+
+    syncOrders();
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      disposed = true;
+      if (timerId) clearTimeout(timerId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [orders, showToast]);
 
   const modalProduct = useMemo(
     () => PRODUCTS.find((p) => p.id === productModalId) || null,
@@ -428,13 +645,17 @@ export default function App() {
             selectedVariants={selectedVariants}
             onSelectVariant={handleSelectVariant}
             getCartQty={getCartQty}
+            getAvailableStock={getAvailableStock}
+            getProductCartQty={getProductCartQty}
             onAddToCart={handleAddToCart}
             onUpdateQty={handleUpdateQty}
             onOpenProductModal={(id) => setProductModalId(id)}
             onHeroQuickAdd={() => {
               const kit = PRODUCTS.find((p) => p.id === 'kit-escolar-bulgari') || PRODUCTS[0];
-              handleAddToCart(kit.id, kit.variants[0], 1);
-              setIsCartOpen(true);
+              const added = handleAddToCart(kit.id, kit.variants[0], 1);
+              if (added) {
+                setIsCartOpen(true);
+              }
             }}
           />
         )}
@@ -452,7 +673,6 @@ export default function App() {
         {view === 'vista-confirmacion' && (
           <ConfirmationView
             order={activeOrder}
-            onAdvanceTracking={handleAdvanceTracking}
             onBackToCatalog={() => switchView('vista-tienda', '#catalogo')}
             onOpenHistory={() => setIsHistoryOpen(true)}
           />
@@ -505,6 +725,8 @@ export default function App() {
       <ProductModal
         product={modalProduct}
         selectedVariant={modalProduct ? selectedVariants[modalProduct.id] : ''}
+        availableStock={modalProduct ? getAvailableStock(modalProduct.id) : 0}
+        productCartQty={modalProduct ? getProductCartQty(modalProduct.id) : 0}
         onSelectVariant={handleSelectVariant}
         onAddToCart={handleAddToCart}
         onClose={() => setProductModalId(null)}

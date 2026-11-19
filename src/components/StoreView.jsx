@@ -14,6 +14,8 @@ export default function StoreView({
   selectedVariants,
   onSelectVariant,
   getCartQty,
+  getAvailableStock,
+  getProductCartQty,
   onAddToCart,
   onUpdateQty,
   onOpenProductModal,
@@ -133,12 +135,20 @@ export default function StoreView({
               {filteredProducts.map((product) => {
                 const selectedVariant = selectedVariants[product.id] || product.variants[0];
                 const qtyInCart = getCartQty(product.id, selectedVariant);
+                const availableStock = getAvailableStock(product.id);
+                const productCartQty = getProductCartQty(product.id);
+                const isOutOfStock = availableStock <= 0;
+                const isLowStock = availableStock > 0 && availableStock <= 5;
+                const atMaxStock = productCartQty >= availableStock;
                 const mediaClass = product.mediaClass
                   ? `product-media ${product.mediaClass}`
                   : 'product-media';
 
                 return (
-                  <article key={product.id} className="product-card">
+                  <article
+                    key={product.id}
+                    className={`product-card${isOutOfStock ? ' product-card--out' : ''}`}
+                  >
                     <div className={mediaClass}>
                       <img src={product.image} alt={product.alt} />
                     </div>
@@ -154,6 +164,19 @@ export default function StoreView({
                           <span className="meta-tag meta-tag--today">Listo hoy en tienda</span>
                         ) : (
                           <span className="meta-tag">Listo en 24 h</span>
+                        )}
+                        {isOutOfStock ? (
+                          <span className="meta-tag meta-tag--stock-out">Agotado · 0 disponibles</span>
+                        ) : isLowStock ? (
+                          <span className="meta-tag meta-tag--stock-low tabular">
+                            {availableStock === 1
+                              ? '¡Última 1 unidad!'
+                              : `¡Últimas ${availableStock} unidades!`}
+                          </span>
+                        ) : (
+                          <span className="meta-tag meta-tag--stock-ok tabular">
+                            Stock: {availableStock} disponibles
+                          </span>
                         )}
                       </div>
                       <div className="variant-group">
@@ -186,13 +209,31 @@ export default function StoreView({
                             <span className="qty-inline-val tabular">{qtyInCart} en reserva</span>
                             <button
                               type="button"
-                              className="qty-inline-btn"
+                              className={`qty-inline-btn${atMaxStock ? ' qty-inline-btn--limit' : ''}`}
                               aria-label={`Añadir una unidad más de ${product.name}`}
+                              aria-disabled={atMaxStock ? 'true' : 'false'}
                               onClick={() => onUpdateQty(product.id, selectedVariant, 1)}
                             >
                               +
                             </button>
                           </div>
+                        ) : isOutOfStock ? (
+                          <button
+                            type="button"
+                            className="btn btn--primary"
+                            disabled
+                          >
+                            Sin stock disponible
+                          </button>
+                        ) : atMaxStock ? (
+                          <button
+                            type="button"
+                            className="btn btn--primary"
+                            aria-disabled="true"
+                            onClick={() => onAddToCart(product.id, selectedVariant, 1)}
+                          >
+                            Stock máximo en reserva ({availableStock})
+                          </button>
                         ) : (
                           <button
                             type="button"

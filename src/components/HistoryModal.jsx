@@ -1,6 +1,6 @@
-import React, { useEffect, useRef } from 'react';
-import { TRACKING_LABELS } from '../data/products.js';
+import React, { useEffect, useRef, useState } from 'react';
 import { formatGTQ } from '../utils/currency.js';
+import { formatCountdown, getOrderTrackingState } from '../utils/tracking.js';
 
 export default function HistoryModal({
   isOpen,
@@ -9,6 +9,8 @@ export default function HistoryModal({
   onClose
 }) {
   const dialogRef = useRef(null);
+  const [now, setNow] = useState(() => Date.now());
+  const hasActiveOrders = orders.some((order) => !getOrderTrackingState(order, now).isCompleted);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -19,6 +21,18 @@ export default function HistoryModal({
       dialog.close();
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    setNow(Date.now());
+    if (!hasActiveOrders) return undefined;
+
+    const intervalId = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(intervalId);
+  }, [isOpen, hasActiveOrders]);
 
   return (
     <dialog
@@ -60,16 +74,20 @@ export default function HistoryModal({
           ) : (
             orders.map((order) => {
               const pickup = order.pickup || order.address || {};
+              const tracking = getOrderTrackingState(order, now);
               return (
                 <article key={order.id} className="history-card">
                   <div className="history-card-head">
                     <strong className="tabular">
                       {order.id} · {formatGTQ(order.total)}
                     </strong>
-                    <span className="meta-tag">
-                      {TRACKING_LABELS[order.trackingIndex]?.title || 'Reserva registrada'}
-                    </span>
+                    <span className="meta-tag">{tracking.currentStep.title}</span>
                   </div>
+                  {!tracking.isCompleted && (
+                    <div className="history-card-timer tabular">
+                      Próximo cambio ({tracking.nextStep.title}) en {formatCountdown(tracking.remainingMs)}
+                    </div>
+                  )}
                   <div>
                     {order.payment.label} — {order.payment.statusText}
                   </div>

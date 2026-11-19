@@ -101,6 +101,19 @@ export default function CartDrawer({
                         <div>
                           <p className="cart-item-title">{item.product.name}</p>
                           <p className="cart-item-variant">{item.variant}</p>
+                          {item.exceedsStock ? (
+                            <p className="cart-item-stock cart-item-stock--error tabular">
+                              Supera el stock disponible ({item.availableStock} disp.)
+                            </p>
+                          ) : item.atMaxStock ? (
+                            <p className="cart-item-stock cart-item-stock--limit tabular">
+                              Límite de stock alcanzado ({item.availableStock} disp.)
+                            </p>
+                          ) : (
+                            <p className="cart-item-stock tabular">
+                              Stock disponible: {item.availableStock} uds.
+                            </p>
+                          )}
                         </div>
                         <strong className="tabular">{formatGTQ(item.lineTotal)}</strong>
                       </div>
@@ -116,7 +129,9 @@ export default function CartDrawer({
                           <span className="tabular">{item.qty}</span>
                           <button
                             type="button"
+                            className={item.atMaxStock ? 'qty-stepper-btn--limit' : undefined}
                             aria-label={`Aumentar cantidad de ${item.product.name}`}
+                            aria-disabled={item.atMaxStock ? 'true' : 'false'}
                             onClick={() => onUpdateQty(item.product.id, item.variant, 1)}
                           >
                             +
@@ -153,6 +168,11 @@ export default function CartDrawer({
                   <dd className="tabular">{formatGTQ(metrics.total)}</dd>
                 </div>
               </dl>
+              {metrics.hasStockErrors && (
+                <div className="stock-alert" role="alert">
+                  Ajusta las cantidades que superan el stock disponible antes de continuar con tu reserva.
+                </div>
+              )}
               <p className="drawer-address-reminder">
                 Sin compra online: en el siguiente paso ingresarás tu nombre y horario de retiro para reservar y pagar únicamente en efectivo en mostrador al recoger.
               </p>
@@ -160,6 +180,7 @@ export default function CartDrawer({
                 <button
                   type="button"
                   className="btn btn--primary btn--full"
+                  disabled={metrics.hasStockErrors}
                   onClick={onGoToCheckout}
                 >
                   Continuar a datos de reserva
